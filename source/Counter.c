@@ -39,6 +39,7 @@
 #include "MKL25Z4.h"
 
 /* TODO: insert other include files here. */
+#include "app_CounterPractice.h"
 
 /* TODO: insert other definitions and declarations here. */
 
@@ -55,11 +56,11 @@ int main(void) {
 
     printf("Hello World\n");
 
-    /* Force the counter to be placed into memory. */
-    volatile static int i = 0 ;
+    app_CounterPractice_Init();
+
     /* Enter an infinite loop, just incrementing a counter. */
     while(1) {
-        i++ ;
+        app_CounterPractice_Task();
     }
     return 0 ;
 }
