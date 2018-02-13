@@ -6,11 +6,13 @@
  */
 
 /* Interfaces/Drivers */
+#include <applications/app_Timer.h>
+#include <applications/app_ADCPractice.h>
+#include <applications/app_CounterPractice.h>
 #include "stdtypedef.h"
 #include "fsl_clock.h"
 #include "fsl_port.h"
 #include "fsl_gpio.h"
-#include "app_CounterPractice.h"
 
 /* Local Typedefs */
 typedef enum
@@ -20,6 +22,15 @@ typedef enum
 	DIGIT2,
 	N_DIGITS
 }T_DIGIT;
+
+
+typedef enum
+{
+	COUNTER,
+	TIMER,
+	ADC,
+	N_MODES
+}T_MODES;
 
 /* Local Macros */
 
@@ -49,12 +60,13 @@ typedef enum
 #define APP_COUNTERPRACTICE_7SEG_G_PIN_NUMBER		11u
 #define APP_COUNTERPRACTICE_7SEG_DOT_PIN_NUMBER		5u
 
-#define APP_COUNTERPRACTICE_7SEG_DIGIT0_PIN_NUMBER	30u
-#define APP_COUNTERPRACTICE_7SEG_DIGIT1_PIN_NUMBER	29u
-#define APP_COUNTERPRACTICE_7SEG_DIGIT2_PIN_NUMBER	23u
+#define APP_COUNTERPRACTICE_7SEG_DIGIT0_PIN_NUMBER	29u
+#define APP_COUNTERPRACTICE_7SEG_DIGIT1_PIN_NUMBER	23u
+#define APP_COUNTERPRACTICE_7SEG_DIGIT2_PIN_NUMBER	30u
 
-#define APP_COUNTERPRACTICE_DEBOUNCE_SHORT_PRESS_VALUE	1000u
-#define APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_VALUE	3000u
+#define APP_COUNTERPRACTICE_DEBOUNCE_SHORT_PRESS_VALUE		1000u
+#define APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_VALUE		3000u
+#define APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_MULTIPLIER	5u
 
 /* Extern Variables */
 
@@ -71,6 +83,7 @@ static T_UBYTE rub_ResetPressedFlag 	= FALSE;
 
 static T_UBYTE rub_LongIncreasePressedFlag 	= FALSE;
 static T_UBYTE rub_LongDecreasePressedFlag 	= FALSE;
+static T_UBYTE rub_LongResetPressedFlag 	= FALSE;
 
 static T_UWORD raub_DebounceCounter[N_DIGITS] = {0,0,0};
 
@@ -102,6 +115,8 @@ static const T_UBYTE caub_DigitPinNum[N_DIGITS] = {
 		APP_COUNTERPRACTICE_7SEG_DIGIT2_PIN_NUMBER
 };
 
+static T_MODES re_OperationMode = ADC;
+
 /* Prototypes */
 static T_UBYTE app_CounterPractice_CheckInputs(void);
 static T_UBYTE app_CounterPractice_ResetButtonIsPressed(void);
@@ -110,10 +125,11 @@ static T_UBYTE app_CounterPractice_DecreaseButtonIsPressed(void);
 static void app_CounterPractice_ClearCounter(void);
 static void app_CounterPractice_IncreaseCounter(void);
 static void app_CounterPractice_DecreaseCounter(void);
-static void app_CounterPractice_Byte2BCD(T_UBYTE* lpub_Data, T_UBYTE* lpub_Uni, T_UBYTE* lpub_Ten, T_UBYTE* lpub_Hun);
+static void app_CounterPractice_Dec2BCD(T_UWORD lpuw_Data, T_UBYTE* lpub_Uni, T_UBYTE* lpub_Ten, T_UBYTE* lpub_Hun);
 static T_UBYTE app_CounterPractice_BCD27Seg(T_UBYTE lub_BCDData);
 static void app_CounterPractice_Set7SegOutput(T_UBYTE lub_7SegData);
 static void app_CounterPractice_DigitManager(void);
+static void app_CounterPractice_SelectMode(void);
 
 /* Functions */
 
@@ -126,6 +142,8 @@ static void app_CounterPractice_DigitManager(void);
  ************************************************/
 void app_CounterPractice_Task(void)
 {
+	T_UWORD luw_DataToShow;
+
 	/* Check and store the input values */
 	rub_InputValue = app_CounterPractice_CheckInputs();
 
@@ -136,23 +154,44 @@ void app_CounterPractice_Task(void)
 		app_CounterPractice_ClearCounter();
 	}
 	/* Check for Increase Button */
-	else if(app_CounterPractice_IncreaseButtonIsPressed() == TRUE)
+	else if(app_CounterPractice_IncreaseButtonIsPressed() == TRUE &&
+			COUNTER == re_OperationMode)
 	{
 		app_CounterPractice_IncreaseCounter();
 	}
 	/* Check for Decrease Button */
-	else if (app_CounterPractice_DecreaseButtonIsPressed() == TRUE)
+	else if (app_CounterPractice_DecreaseButtonIsPressed() == TRUE &&
+			COUNTER == re_OperationMode)
 	{
 		app_CounterPractice_DecreaseCounter();
 	}
 	/* Any button pressed */
 	else
 	{
-		/* Do Nothing */
+		/* Check If Timer has been passed */
+		if(TRUE == app_Timer_IsExpired() &&
+				TIMER == re_OperationMode)
+		{
+			app_CounterPractice_IncreaseCounter();
+		}
+		else
+		{
+			/* Do Nothing */
+		}
+	}
+
+	/* Select Data to show */
+	if(ADC != re_OperationMode)
+	{
+		luw_DataToShow = rub_Counter;
+	}
+	else
+	{
+		luw_DataToShow = (525u* (T_UWORD)app_ADCPractice_GetConversion())/100;
 	}
 
 	/* Convert Byte to BCD */
-	app_CounterPractice_Byte2BCD(&rub_Counter, &rub_BCDUnits, &rub_BCDTens, &rub_BCDHundreds);
+	app_CounterPractice_Dec2BCD(luw_DataToShow, &rub_BCDUnits, &rub_BCDTens, &rub_BCDHundreds);
 
 	/* Multiplexing task */
 	app_CounterPractice_DigitManager();
@@ -309,6 +348,35 @@ static T_UBYTE app_CounterPractice_ResetButtonIsPressed(void)
 		}
 
 	}
+	/* Check for long press */
+	else if((rub_InputValue & APP_COUNTERPRACTICE_RESET_MASK) == APP_COUNTERPRACTICE_RESET_MASK &&
+			rub_ResetPressedFlag == TRUE)
+	{//Button pressed and debounce counter validated
+
+		/* Set Long Press "In Validation" Flag */
+		rub_LongResetPressedFlag = TRUE;
+
+		/* Check if a long press has been performed */
+		if(raub_DebounceCounter[APP_COUNTERPRACTICE_RESET_SHIFT_MASK] >= (APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_VALUE * APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_MULTIPLIER))
+		{
+			/* Clear Long Press "In Validation" Flag */
+			rub_ResetPressedFlag = FALSE;
+
+			/* Clear Press Flag */
+			rub_LongResetPressedFlag = FALSE;
+
+			/* Clear debounce counter */
+			raub_DebounceCounter[APP_COUNTERPRACTICE_RESET_SHIFT_MASK] = 0u;
+
+			/* Next Operation Mode */
+			app_CounterPractice_SelectMode();
+		}
+		/* Long press not reached yet */
+		else
+		{
+			raub_DebounceCounter[APP_COUNTERPRACTICE_RESET_SHIFT_MASK]++;
+		}
+	}
 	else
 	{
 		/* Clear Debounce Counter */
@@ -395,7 +463,7 @@ static T_UBYTE app_CounterPractice_IncreaseButtonIsPressed(void)
 		rub_LongIncreasePressedFlag = TRUE;
 
 		/* Check if a long press has been performed */
-		if(raub_DebounceCounter[APP_COUNTERPRACTICE_INCREASE_SHIFT_MASK] >= APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_VALUE)
+		if(raub_DebounceCounter[APP_COUNTERPRACTICE_INCREASE_SHIFT_MASK] >= APP_COUNTERPRACTICE_DEBOUNCE_LONG_PRESS_VALUE )
 		{
 			/* Clear Long Press "In Validation" Flag */
 			rub_IncreasePressedFlag = FALSE;
@@ -510,7 +578,7 @@ static T_UBYTE app_CounterPractice_DecreaseButtonIsPressed(void)
 			/* Clear Long Press "In Validation" Flag */
 			rub_DecreasePressedFlag = FALSE;
 
-			/* Clear Long Press "In Validation" Flag */
+			/* Clear Long Press Flag */
 			rub_LongDecreasePressedFlag = FALSE;
 
 			/* Clear debounce counter */
@@ -601,23 +669,23 @@ static void app_CounterPractice_DecreaseCounter(void)
  * 				lpub_Hun	-> Pointer to variable to store hundreds
  * Return: None
  ************************************************/
-static void app_CounterPractice_Byte2BCD(T_UBYTE* lpub_Data, T_UBYTE* lpub_Uni, T_UBYTE* lpub_Ten, T_UBYTE* lpub_Hun)
+static void app_CounterPractice_Dec2BCD(T_UWORD lpuw_Data, T_UBYTE* lpub_Uni, T_UBYTE* lpub_Ten, T_UBYTE* lpub_Hun)
 {
-	T_UBYTE lub_Data;
+	T_UWORD luw_Data;
 
 	/* Get data to be converted */
-	lub_Data = *lpub_Data;
+	luw_Data = lpuw_Data;
 
 	/* Get Hundreds */
-	*lpub_Hun = lub_Data / 100u;
+	*lpub_Hun = luw_Data / 100u;
 
 	/* Get Tens */
-	lub_Data -= (*lpub_Hun * 100u);
-	*lpub_Ten = lub_Data / 10u;
+	luw_Data -= (*lpub_Hun * 100u);
+	*lpub_Ten = luw_Data / 10u;
 
 	/* Get Units */
-	lub_Data -= (*lpub_Ten * 10u);
-	*lpub_Uni = lub_Data;
+	luw_Data -= (*lpub_Ten * 10u);
+	*lpub_Uni = luw_Data;
 }
 
 /************************************************
@@ -689,27 +757,82 @@ static void app_CounterPractice_DigitManager(void)
 		/* Convert BCD to 7 Seg. Then, set the 7 seg outputs*/
 		app_CounterPractice_Set7SegOutput( app_CounterPractice_BCD27Seg( rub_BCDUnits ) );
 
-		/* Prepare Next Digit state */
-		re_DigitToShow = DIGIT1;
+		/* Dot to show mode */
+		if(COUNTER == re_OperationMode)
+		{
+			/* Set DOT segment */
+			GPIO_WritePinOutput(GPIOC, APP_COUNTERPRACTICE_7SEG_DOT_PIN_NUMBER, FALSE);
+		}
+		else
+		{
+			/* Do Nothing */
+		}
+
 	}break;
 	case DIGIT1:
 	{
 		/* Show the tens */
 		/* Convert BCD to 7 Seg. Then, set the 7 seg outputs*/
 		app_CounterPractice_Set7SegOutput( app_CounterPractice_BCD27Seg( rub_BCDTens ) );
-		/* Prepare Next Digit state */
-		re_DigitToShow = DIGIT2;
+
+		/* Dot to show mode */
+		if(TIMER == re_OperationMode)
+		{
+			/* Set DOT segment */
+			GPIO_WritePinOutput(GPIOC, APP_COUNTERPRACTICE_7SEG_DOT_PIN_NUMBER, FALSE);
+		}
+		else
+		{
+			/* Do Nothing */
+		}
 	}break;
 	case DIGIT2:
 	{
 		/* Show the Hundreds */
 		/* Convert BCD to 7 Seg. Then, set the 7 seg outputs*/
 		app_CounterPractice_Set7SegOutput( app_CounterPractice_BCD27Seg( rub_BCDHundreds ) );
-		/* Prepare Next Digit state */
-		re_DigitToShow = DIGIT0;
+
+		/* Dot to show mode */
+		if(ADC == re_OperationMode)
+		{
+			/* Set DOT segment */
+			GPIO_WritePinOutput(GPIOC, APP_COUNTERPRACTICE_7SEG_DOT_PIN_NUMBER, FALSE);
+		}
+		else
+		{
+			/* Do Nothing */
+		}
 	}break;
 	}
 
 	/* Digit PwrOn */
 	GPIO_WritePinOutput(GPIOE, caub_DigitPinNum[(T_UBYTE)re_DigitToShow], TRUE);
+
+	/* Prepare Next Digit state */
+	if((N_DIGITS - 1) > re_DigitToShow)
+	{
+		re_DigitToShow++;
+	}
+	else
+	{
+		re_DigitToShow = DIGIT0;
+	}
+}
+
+/************************************************
+ * Name: app_CounterPractice_SelectMode
+ * Description: This function manages each digit per cycle
+ * Parameters: 	none
+ * Return: None
+ ************************************************/
+static void app_CounterPractice_SelectMode(void)
+{
+	if((N_MODES - 1u) > re_OperationMode)
+	{
+		re_OperationMode++;
+	}
+	else
+	{
+		re_OperationMode = COUNTER;
+	}
 }

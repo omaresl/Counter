@@ -32,6 +32,9 @@
  * @file    Counter.c
  * @brief   Application entry point.
  */
+#include <applications/app_Timer.h>
+#include <applications/app_ADCPractice.h>
+#include <applications/app_CounterPractice.h>
 #include <stdio.h>
 #include "board.h"
 #include "pin_mux.h"
@@ -39,7 +42,6 @@
 #include "MKL25Z4.h"
 
 /* TODO: insert other include files here. */
-#include "app_CounterPractice.h"
 
 /* TODO: insert other definitions and declarations here. */
 
@@ -56,10 +58,13 @@ int main(void) {
 
     printf("Hello World\n");
 
+    app_ADCPractice_Init();
+    app_Timer_Init();
     app_CounterPractice_Init();
 
     /* Enter an infinite loop, just incrementing a counter. */
     while(1) {
+    	app_ADCPractice_Task();
         app_CounterPractice_Task();
     }
     return 0 ;
