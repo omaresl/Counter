@@ -11,7 +11,8 @@
 #define FALSE	0x00u
 #define TRUE	0x01u
 
-typedef unsigned char T_UBYTE;
+typedef unsigned char 	T_UBYTE;
+typedef unsigned short	T_UWORD;
 
 typedef union
 {
